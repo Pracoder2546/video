@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Video Chat</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <!-- Start screen -->
+  <section id="start-screen" class="screen">
+    <div class="card">
+      <h1>Video Chat</h1>
+      <p>Pick a nickname and meet people instantly. Camera and microphone access is required.</p>
+      <input id="nick-input" type="text" maxlength="20" placeholder="Your nickname" autocomplete="off">
+      <button id="start-btn" class="btn primary">Start</button>
+      <p id="start-error" class="error"></p>
+    </div>
+  </section>
+
+  <!-- Chat screen -->
+  <section id="chat-screen" class="screen hidden">
+    <header class="topbar">
+      <strong>Video Chat</strong>
+      <span id="status">Connecting…</span>
+      <button id="leave-btn" class="btn danger">Leave</button>
+    </header>
+
+    <main class="layout">
+      <div id="video-grid" class="video-grid"></div>
+
+      <aside class="chat">
+        <div id="messages" class="messages"></div>
+        <form id="chat-form" class="chat-form">
+          <input id="chat-input" type="text" maxlength="500" placeholder="Type a message…" autocomplete="off">
+          <button class="btn primary" type="submit">Send</button>
+        </form>
+      </aside>
+    </main>
+  </section>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
