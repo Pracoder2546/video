@@ -4,6 +4,7 @@ const nickInput = document.getElementById("nick-input");
 const startBtn = document.getElementById("start-btn");
 const startError = document.getElementById("start-error");
 const leaveBtn = document.getElementById("leave-btn");
+const camBtn = document.getElementById("cam-btn");
 const statusEl = document.getElementById("status");
 const grid = document.getElementById("video-grid");
 const messages = document.getElementById("messages");
@@ -12,16 +13,21 @@ const chatInput = document.getElementById("chat-input");
 
 let ws = null;
 let localStream = null;
+let hasVideo = false;
+let hasAudio = false;
+let camOn = false;
 let myId = null;
 let myNick = "";
 let iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
 const peers = {}; // id -> { pc, nick, tile, pending: [] }
+const tiles = {}; // id -> { el, video, avatar }
 
 nickInput.value = localStorage.getItem("nick") || "";
 
 startBtn.addEventListener("click", start);
 nickInput.addEventListener("keydown", (e) => { if (e.key === "Enter") start(); });
 leaveBtn.addEventListener("click", leave);
+camBtn.addEventListener("click", toggleCamera);
 
 chatForm.addEventListener("submit", (e) => {
   e.preventDefault();
@@ -30,6 +36,22 @@ chatForm.addEventListener("submit", (e) => {
   ws.send(JSON.stringify({ type: "chat", text }));
   chatInput.value = "";
 });
+
+// Try camera+mic, then camera only, then mic only, then nothing (chat only)
+async function getMedia() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return null;
+  const attempts = [
+    { video: true, audio: true },
+    { video: true, audio: false },
+    { video: false, audio: true },
+  ];
+  for (const constraints of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (err) { /* try the next option */ }
+  }
+  return null;
+}
 
 async function start() {
   const nick = nickInput.value.trim();
@@ -40,13 +62,10 @@ async function start() {
   startError.textContent = "";
   startBtn.disabled = true;
 
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-  } catch (err) {
-    startError.textContent = "Camera and microphone access is required.";
-    startBtn.disabled = false;
-    return;
-  }
+  localStream = await getMedia();
+  hasVideo = !!localStream && localStream.getVideoTracks().length > 0;
+  hasAudio = !!localStream && localStream.getAudioTracks().length > 0;
+  camOn = hasVideo;
 
   try {
     const res = await fetch("/config");
@@ -61,7 +80,18 @@ async function start() {
   chatScreen.classList.remove("hidden");
   messages.innerHTML = "";
   grid.innerHTML = "";
-  addTile("local", "You (" + nick + ")", localStream, true);
+
+  addTile("local", "You (" + nick + ")", localStream, true, camOn);
+  camBtn.classList.toggle("hidden", !hasVideo);
+  updateCamButton();
+
+  if (!hasVideo && !hasAudio) {
+    addSystem("No camera or microphone found. You joined in chat-only mode.");
+  } else if (!hasVideo) {
+    addSystem("No camera found. Others will see your name only.");
+  } else if (!hasAudio) {
+    addSystem("No microphone found. Others can see you but not hear you.");
+  }
   setStatus("Waiting for someone to join…");
 
   connectSocket();
@@ -71,7 +101,7 @@ function connectSocket() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(proto + "://" + location.host + "/ws");
 
-  ws.onopen = () => ws.send(JSON.stringify({ type: "join", nick: myNick }));
+  ws.onopen = () => ws.send(JSON.stringify({ type: "join", nick: myNick, cam: camOn }));
 
   ws.onmessage = async (event) => {
     const msg = JSON.parse(event.data);
@@ -80,19 +110,20 @@ function connectSocket() {
       myId = msg.id;
       // We are the newcomer: send an offer to everyone already in the room
       for (const p of msg.peers) {
-        await createPeer(p.id, p.nick, true);
+        await createPeer(p.id, p.nick, p.cam, true);
       }
       updateStatus();
     } else if (msg.type === "peer-joined") {
-      // Existing member: wait for the newcomer's offer
       addSystem(msg.nick + " joined");
-      await createPeer(msg.id, msg.nick, false);
+      await createPeer(msg.id, msg.nick, msg.cam, false);
       updateStatus();
     } else if (msg.type === "peer-left") {
       const p = peers[msg.id];
       if (p) addSystem(p.nick + " left");
       removePeer(msg.id);
       updateStatus();
+    } else if (msg.type === "cam") {
+      setTileCam(msg.id, msg.on);
     } else if (msg.type === "signal") {
       await handleSignal(msg.from, msg.data);
     } else if (msg.type === "chat") {
@@ -101,25 +132,38 @@ function connectSocket() {
   };
 
   ws.onclose = () => {
-    if (localStream) setStatus("Disconnected from server.");
+    if (chatScreen.classList.contains("hidden")) return;
+    setStatus("Disconnected from server.");
   };
 }
 
-async function createPeer(id, nick, initiator) {
+async function createPeer(id, nick, cam, initiator) {
   if (peers[id]) return peers[id];
 
   const pc = new RTCPeerConnection({ iceServers });
-  const peer = { pc, nick, tile: null, pending: [] };
+  const peer = { pc, nick, pending: [] };
   peers[id] = peer;
 
-  localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+  // Show the person right away (their name shows if they have no camera)
+  addTile(id, nick, null, false, !!cam);
+
+  if (localStream) localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+
+  // If we have no camera/mic, still ask to receive theirs
+  if (initiator) {
+    if (!hasVideo) pc.addTransceiver("video", { direction: "recvonly" });
+    if (!hasAudio) pc.addTransceiver("audio", { direction: "recvonly" });
+  }
 
   pc.onicecandidate = (e) => {
     if (e.candidate) sendSignal(id, { candidate: e.candidate });
   };
 
   pc.ontrack = (e) => {
-    if (!peer.tile) peer.tile = addTile(id, nick, e.streams[0], false);
+    const t = tiles[id];
+    if (t && e.streams[0] && t.video.srcObject !== e.streams[0]) {
+      t.video.srcObject = e.streams[0];
+    }
   };
 
   if (initiator) {
@@ -132,7 +176,7 @@ async function createPeer(id, nick, initiator) {
 
 async function handleSignal(from, data) {
   let peer = peers[from];
-  if (!peer) peer = await createPeer(from, "Guest", false);
+  if (!peer) peer = await createPeer(from, "Guest", false, false);
   const pc = peer.pc;
 
   if (data.sdp) {
@@ -159,28 +203,61 @@ function sendSignal(to, data) {
 
 function removePeer(id) {
   const peer = peers[id];
-  if (!peer) return;
-  peer.pc.close();
-  if (peer.tile) peer.tile.remove();
-  delete peers[id];
+  if (peer) {
+    peer.pc.close();
+    delete peers[id];
+  }
+  if (tiles[id]) {
+    tiles[id].el.remove();
+    delete tiles[id];
+  }
   updateGrid();
 }
 
-function addTile(id, label, stream, isLocal) {
-  const tile = document.createElement("div");
-  tile.className = "tile" + (isLocal ? " local" : "");
+function addTile(id, label, stream, isLocal, cam) {
+  const el = document.createElement("div");
+  el.className = "tile" + (isLocal ? " local" : "");
+
   const video = document.createElement("video");
   video.autoplay = true;
   video.playsInline = true;
   video.muted = isLocal; // never hear yourself
-  video.srcObject = stream;
+  if (stream) video.srcObject = stream;
+
+  const avatar = document.createElement("div");
+  avatar.className = "avatar";
+  avatar.textContent = label;
+
   const name = document.createElement("div");
   name.className = "name";
   name.textContent = label;
-  tile.append(video, name);
-  grid.appendChild(tile);
+
+  el.append(video, avatar, name);
+  grid.appendChild(el);
+  tiles[id] = { el, video, avatar };
+  setTileCam(id, cam);
   updateGrid();
-  return tile;
+}
+
+function setTileCam(id, on) {
+  const t = tiles[id];
+  if (t) t.el.classList.toggle("cam-off", !on);
+}
+
+function toggleCamera() {
+  if (!hasVideo || !localStream) return;
+  camOn = !camOn;
+  localStream.getVideoTracks().forEach((t) => { t.enabled = camOn; });
+  setTileCam("local", camOn);
+  updateCamButton();
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "cam", on: camOn }));
+  }
+}
+
+function updateCamButton() {
+  camBtn.textContent = camOn ? "Camera: On" : "Camera: Off";
+  camBtn.classList.toggle("off", !camOn);
 }
 
 function updateGrid() {
@@ -221,6 +298,8 @@ function leave() {
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
   myId = null;
+  hasVideo = hasAudio = camOn = false;
+  Object.keys(tiles).forEach((k) => delete tiles[k]);
   grid.innerHTML = "";
   chatScreen.classList.add("hidden");
   startScreen.classList.remove("hidden");
