@@ -16,8 +16,13 @@ let localStream = null;
 let hasVideo = false;
 let hasAudio = false;
 let camOn = false;
+let mediaError = "";
 let myId = null;
 let myNick = "";
+let isHost = false;
+const friendLink = new URLSearchParams(location.search).has("friends");
+let audioCtx = null;
+let lastScare = 0;
 let iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
 const peers = {}; // id -> { pc, nick, tile, pending: [] }
 const tiles = {}; // id -> { el, video, avatar }
@@ -48,12 +53,15 @@ async function getMedia() {
   for (const constraints of attempts) {
     try {
       return await navigator.mediaDevices.getUserMedia(constraints);
-    } catch (err) { /* try the next option */ }
+    } catch (err) {
+      if (!mediaError) mediaError = err.name || "";
+    }
   }
   return null;
 }
 
 async function start() {
+  mediaError = "";
   const nick = nickInput.value.trim();
   if (!nick) {
     startError.textContent = "Please enter a nickname.";
@@ -61,6 +69,12 @@ async function start() {
   }
   startError.textContent = "";
   startBtn.disabled = true;
+
+  // Unlock audio (needed for host effects) while we have a user click
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx.resume();
+  } catch (_) { /* no audio effects */ }
 
   localStream = await getMedia();
   hasVideo = !!localStream && localStream.getVideoTracks().length > 0;
@@ -88,7 +102,13 @@ async function start() {
   if (!hasVideo && !hasAudio) {
     addSystem("No camera or microphone found. You joined in chat-only mode.");
   } else if (!hasVideo) {
-    addSystem("No camera found. Others will see your name only.");
+    if (mediaError === "NotReadableError" || mediaError === "AbortError") {
+      addSystem("Your camera is busy (another window or app is using it). You joined without video, so others see your name only.");
+    } else if (mediaError === "NotAllowedError") {
+      addSystem("Camera permission was blocked. You joined without video, so others see your name only.");
+    } else {
+      addSystem("No camera found. Others will see your name only.");
+    }
   } else if (!hasAudio) {
     addSystem("No microphone found. Others can see you but not hear you.");
   }
@@ -101,13 +121,16 @@ function connectSocket() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(proto + "://" + location.host + "/ws");
 
-  ws.onopen = () => ws.send(JSON.stringify({ type: "join", nick: myNick, cam: camOn }));
+  ws.onopen = () => ws.send(JSON.stringify({ type: "join", nick: myNick, cam: camOn, friend: friendLink }));
 
   ws.onmessage = async (event) => {
     const msg = JSON.parse(event.data);
 
     if (msg.type === "welcome") {
       myId = msg.id;
+      isHost = !!msg.host;
+      document.getElementById("host-bar").classList.toggle("hidden", !isHost);
+      if (isHost) addSystem("You are the host \uD83D\uDC51 Use the buttons on each person's tile.");
       // We are the newcomer: send an offer to everyone already in the room
       for (const p of msg.peers) {
         await createPeer(p.id, p.nick, p.cam, true);
@@ -122,6 +145,10 @@ function connectSocket() {
       if (p) addSystem(p.nick + " left");
       removePeer(msg.id);
       updateStatus();
+    } else if (msg.type === "host-note") {
+      addSystem(msg.text);
+    } else if (msg.type === "host-cmd") {
+      handleHostCmd(msg.action);
     } else if (msg.type === "cam") {
       setTileCam(msg.id, msg.on);
     } else if (msg.type === "signal") {
@@ -146,6 +173,7 @@ async function createPeer(id, nick, cam, initiator) {
 
   // Show the person right away (their name shows if they have no camera)
   addTile(id, nick, null, false, !!cam);
+  if (isHost) addHostControls(id);
 
   if (localStream) localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
 
@@ -159,10 +187,17 @@ async function createPeer(id, nick, cam, initiator) {
     if (e.candidate) sendSignal(id, { candidate: e.candidate });
   };
 
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === "failed") {
+      addSystem("Could not connect video with " + nick + ". Your networks are blocking a direct link. A TURN server is needed.");
+    }
+  };
+
   pc.ontrack = (e) => {
     const t = tiles[id];
     if (t && e.streams[0] && t.video.srcObject !== e.streams[0]) {
       t.video.srcObject = e.streams[0];
+      t.video.play().catch(() => {});
     }
   };
 
@@ -234,7 +269,7 @@ function addTile(id, label, stream, isLocal, cam) {
 
   el.append(video, avatar, name);
   grid.appendChild(el);
-  tiles[id] = { el, video, avatar };
+  tiles[id] = { el, video, avatar, label };
   setTileCam(id, cam);
   updateGrid();
 }
@@ -244,6 +279,7 @@ function setTileCam(id, on) {
   if (t) t.el.classList.toggle("cam-off", !on);
 }
 
+// Turns your camera off/on for EVERYONE (others see your name instead of your video).
 function toggleCamera() {
   if (!hasVideo || !localStream) return;
   camOn = !camOn;
@@ -258,10 +294,11 @@ function toggleCamera() {
 function updateCamButton() {
   camBtn.textContent = camOn ? "Camera: On" : "Camera: Off";
   camBtn.classList.toggle("off", !camOn);
+  camBtn.title = camOn ? "Turn your camera off for everyone" : "Turn your camera on";
 }
 
 function updateGrid() {
-  grid.dataset.count = grid.children.length;
+  grid.dataset.count = grid.querySelectorAll(".tile:not(.hidden)").length;
 }
 
 function updateStatus() {
@@ -299,6 +336,10 @@ function leave() {
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
   myId = null;
   hasVideo = hasAudio = camOn = false;
+  isHost = false;
+  document.getElementById("host-bar").classList.add("hidden");
+  hideScare();
+  camBtn.classList.add("hidden");
   Object.keys(tiles).forEach((k) => delete tiles[k]);
   grid.innerHTML = "";
   chatScreen.classList.add("hidden");
@@ -307,3 +348,112 @@ function leave() {
 }
 
 window.addEventListener("beforeunload", () => { if (ws) ws.close(); });
+
+
+// ---------------- Host controls ----------------
+const scareEl = document.getElementById("scare");
+
+document.getElementById("all-cam-off").addEventListener("click", () => sendHostCmd("cam-off", "all"));
+document.getElementById("all-cam-on").addEventListener("click", () => sendHostCmd("cam-on", "all"));
+document.getElementById("all-scare").addEventListener("click", (e) => {
+  sendHostCmd("jumpscare", "all");
+  e.target.disabled = true;
+  setTimeout(() => { e.target.disabled = false; }, 8000);
+});
+scareEl.addEventListener("click", hideScare);
+
+function sendHostCmd(action, target) {
+  if (isHost && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "host-cmd", action, target }));
+  }
+}
+
+function addHostControls(id) {
+  const t = tiles[id];
+  if (!t) return;
+  const box = document.createElement("div");
+  box.className = "host-controls";
+  [["Cam off", "cam-off"], ["Cam on", "cam-on"], ["Scare", "jumpscare"]].forEach(([label, action]) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.addEventListener("click", () => {
+      sendHostCmd(action, id);
+      if (action === "jumpscare") {
+        b.disabled = true;
+        setTimeout(() => { b.disabled = false; }, 8000);
+      }
+    });
+    box.appendChild(b);
+  });
+  t.el.appendChild(box);
+}
+
+function handleHostCmd(action) {
+  if (action === "cam-off") {
+    if (hasVideo && camOn) {
+      toggleCamera();
+      addSystem("The host turned off your camera. You can turn it back on with the Camera button.");
+    }
+  } else if (action === "cam-on") {
+    if (hasVideo && !camOn) {
+      toggleCamera();
+      addSystem("The host turned your camera on.");
+    }
+  } else if (action === "jumpscare") {
+    jumpscare();
+  }
+}
+
+function jumpscare() {
+  const now = Date.now();
+  if (now - lastScare < 8000) return; // cooldown so it can't be spammed
+  lastScare = now;
+  scareEl.classList.remove("hidden");
+  playScream();
+  if (navigator.vibrate) navigator.vibrate(300);
+  setTimeout(hideScare, 1800);
+}
+
+function hideScare() {
+  scareEl.classList.add("hidden");
+}
+
+function playScream() {
+  if (!audioCtx) return;
+  try {
+    audioCtx.resume();
+    const t = audioCtx.currentTime;
+    const master = audioCtx.createGain();
+    master.gain.value = 0.4;
+    master.connect(audioCtx.destination);
+
+    [440, 660, 880].forEach((f) => {
+      const o = audioCtx.createOscillator();
+      o.type = "sawtooth";
+      o.frequency.setValueAtTime(f, t);
+      o.frequency.exponentialRampToValueAtTime(f * 3, t + 0.6);
+      const g = audioCtx.createGain();
+      g.gain.setValueAtTime(0.3, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 1.2);
+      o.connect(g);
+      g.connect(master);
+      o.start(t);
+      o.stop(t + 1.3);
+    });
+
+    const len = audioCtx.sampleRate;
+    const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = buf;
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(0.5, t);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.8);
+    noise.connect(ng);
+    ng.connect(master);
+    noise.start(t);
+  } catch (_) { /* ignore audio errors */ }
+}
+
+if (friendLink) document.getElementById("friend-note").classList.remove("hidden");
