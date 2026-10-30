@@ -13,6 +13,7 @@
     <div class="card">
       <h1>Video Chat</h1>
       <p>Pick a nickname and meet people instantly. A camera and microphone are optional. Without them you can still chat.</p>
+      <!-- <p id="friend-note" class="friend-note hidden">Friends mode: by joining, you agree the host can turn your camera on and off and play jump scares.</p> -->
       <input id="nick-input" type="text" maxlength="20" placeholder="Your nickname" autocomplete="off">
       <button id="start-btn" class="btn primary">Start</button>
       <p id="start-error" class="error"></p>
@@ -24,7 +25,13 @@
     <header class="topbar">
       <strong>Video Chat</strong>
       <span id="status">Connecting…</span>
-      <button id="cam-btn" class="btn secondary hidden">Camera: On</button>
+      <div id="host-bar" class="host-bar hidden">
+        <span>&#128081; Host</span>
+        <button id="all-cam-off" class="mini">All cams off</button>
+        <button id="all-cam-on" class="mini">All cams on</button>
+        <button id="all-scare" class="mini">Scare all</button>
+      </div>
+      <button id="cam-btn" class="btn secondary hidden">Camera</button>
       <button id="leave-btn" class="btn danger">Leave</button>
     </header>
 
@@ -40,6 +47,18 @@
       </aside>
     </main>
   </section>
+
+    <div id="scare" class="scare hidden">
+    <svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+      <ellipse cx="100" cy="105" rx="70" ry="88" fill="#d9d9d0"/>
+      <ellipse cx="70" cy="80" rx="20" ry="27" fill="#000"/>
+      <ellipse cx="130" cy="80" rx="20" ry="27" fill="#000"/>
+      <circle cx="70" cy="82" r="5" fill="#e00"/>
+      <circle cx="130" cy="82" r="5" fill="#e00"/>
+      <path d="M58 135 Q100 205 142 135 Q100 150 58 135Z" fill="#000"/>
+      <path d="M68 141 l6 14 l6 -12 l6 16 l6 -14 l6 16 l6 -14 l6 14 l6 -12 l6 12 l6 -10" fill="none" stroke="#d9d9d0" stroke-width="3"/>
+    </svg>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>
