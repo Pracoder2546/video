@@ -181,3 +181,67 @@ input[type="text"]:focus { border-color: var(--accent); }
 }
 .tile.cam-off .avatar { display: flex; }
 .tile.cam-off video { visibility: hidden; }
+
+.tile.self-hidden { display: none; }
+
+/* Host controls */
+.host-bar { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.btn.mini, .mini {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 8px;
+  background: #2b3042;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mini:hover { filter: brightness(1.2); }
+.mini:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.host-controls {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 6px;
+  z-index: 2;
+}
+.host-controls button {
+  padding: 4px 9px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 11px;
+  cursor: pointer;
+}
+.host-controls button:hover { background: var(--accent); }
+.host-controls button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Jumpscare (one quick zoom, no flashing) */
+.scare {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.scare svg {
+  width: min(90vw, 90vh);
+  height: min(90vw, 90vh);
+  animation: scare-zoom 0.25s ease-out forwards;
+}
+@keyframes scare-zoom {
+  from { transform: scale(0.2); }
+  to { transform: scale(1.15); }
+}
+
+@media (max-width: 800px) {
+  .topbar { flex-wrap: wrap; }
+  .host-bar { order: 5; width: 100%; flex-wrap: wrap; }
+}
+
+.friend-note { color: #fbbf24 !important; font-size: 13px; }
