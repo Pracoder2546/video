@@ -9,6 +9,8 @@ from aiohttp import WSMsgType, web
 
 BASE_DIR = Path(__file__).parent
 MAX_ROOM_SIZE = 4
+# Whoever joins with this nickname becomes the host (change it with the HOST_NICK env var)
+HOST_NICK = os.environ.get("HOST_NICK", "pratik2546").strip().lower()
 
 # room_id -> {"id": str, "members": {peer_id: {"ws": ws, "nick": str, "cam": bool}}}
 rooms = {}
@@ -30,6 +32,10 @@ def pick_room():
     room = {"id": uuid.uuid4().hex[:8], "members": {}}
     rooms[room["id"]] = room
     return room
+
+
+def host_online():
+    return any(m.get("host") for r in rooms.values() for m in r["members"].values())
 
 
 def online_count():
@@ -123,16 +129,24 @@ async def ws_handler(request):
             kind = data.get("type")
 
             if kind == "join" and room is None:
-                nick = clean_nick(data.get("nick"))
+                nick = clean_nick(data.get("nick")).replace("\U0001F451", "").strip() or "Guest"
                 cam = bool(data.get("cam", False))
+                friend = bool(data.get("friend", False))
+                # Only one host at a time, so nobody can take over from the real host
+                is_host = nick.lower() == HOST_NICK and not host_online()
+                if is_host:
+                    nick = nick + " \U0001F451"
                 room = pick_room()
-                me = {"ws": ws, "nick": nick, "cam": cam}
+                me = {"ws": ws, "nick": nick, "cam": cam, "host": is_host, "friend": friend}
                 existing = [
                     {"id": pid, "nick": m["nick"], "cam": m["cam"]}
                     for pid, m in room["members"].items()
                 ]
                 room["members"][peer_id] = me
-                await send(me, {"type": "welcome", "id": peer_id, "peers": existing})
+                await send(
+                    me,
+                    {"type": "welcome", "id": peer_id, "peers": existing, "host": is_host},
+                )
                 await broadcast(
                     room,
                     {"type": "peer-joined", "id": peer_id, "nick": nick, "cam": cam},
@@ -144,6 +158,32 @@ async def ws_handler(request):
                 on = bool(data.get("on"))
                 room["members"][peer_id]["cam"] = on
                 await broadcast(room, {"type": "cam", "id": peer_id, "on": on}, exclude=peer_id)
+
+            elif kind == "host-cmd" and room is not None and room["members"][peer_id].get("host"):
+                action = data.get("action")
+                if action in ("cam-off", "cam-on", "jumpscare"):
+                    target = data.get("target")
+                    payload = {"type": "host-cmd", "action": action}
+                    if target == "all":
+                        targets = [pid for pid in room["members"] if pid != peer_id]
+                    elif target in room["members"] and target != peer_id:
+                        targets = [target]
+                    else:
+                        targets = []
+                    for pid in targets:
+                        m = room["members"][pid]
+                        # Remote camera-on only works for people who joined via the friends link
+                        if action == "cam-on" and not m.get("friend"):
+                            if target != "all":
+                                await send(
+                                    room["members"][peer_id],
+                                    {
+                                        "type": "host-note",
+                                        "text": m["nick"] + " didn't join with the friends link, so their camera can't be turned on.",
+                                    },
+                                )
+                            continue
+                        await send(m, payload)
 
             elif kind == "signal" and room is not None:
                 target = room["members"].get(data.get("to"))
@@ -177,12 +217,28 @@ async def ws_handler(request):
 
 
 async def config_handler(request):
-    default = [{"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}]
+    stun = {"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}
+    ice = [stun]
+
+    # Optional TURN relay (needed when devices are on different / strict networks)
+    turn_urls = [u.strip() for u in os.environ.get("TURN_URLS", "").split(",") if u.strip()]
+    if turn_urls:
+        ice.append(
+            {
+                "urls": turn_urls,
+                "username": os.environ.get("TURN_USERNAME", ""),
+                "credential": os.environ.get("TURN_CREDENTIAL", ""),
+            }
+        )
+
+    # Advanced: full override with JSON
     try:
-        ice = json.loads(os.environ.get("ICE_SERVERS", ""))
+        custom = json.loads(os.environ.get("ICE_SERVERS", ""))
+        if custom:
+            ice = custom
     except ValueError:
-        ice = default
-    return web.json_response({"iceServers": ice or default})
+        pass
+    return web.json_response({"iceServers": ice})
 
 
 async def index_handler(request):
