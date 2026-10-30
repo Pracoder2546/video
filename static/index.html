@@ -12,7 +12,7 @@
   <section id="start-screen" class="screen">
     <div class="card">
       <h1>Video Chat</h1>
-      <p>Pick a nickname and meet people instantly. Camera and microphone access is required.</p>
+      <p>Pick a nickname and meet people instantly. A camera and microphone are optional. Without them you can still chat.</p>
       <input id="nick-input" type="text" maxlength="20" placeholder="Your nickname" autocomplete="off">
       <button id="start-btn" class="btn primary">Start</button>
       <p id="start-error" class="error"></p>
@@ -24,6 +24,7 @@
     <header class="topbar">
       <strong>Video Chat</strong>
       <span id="status">Connecting…</span>
+      <button id="cam-btn" class="btn secondary hidden">Camera: On</button>
       <button id="leave-btn" class="btn danger">Leave</button>
     </header>
 
