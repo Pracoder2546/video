@@ -10,7 +10,7 @@ from aiohttp import WSMsgType, web
 BASE_DIR = Path(__file__).parent
 MAX_ROOM_SIZE = 4
 # Whoever joins with this nickname becomes the host (change it with the HOST_NICK env var)
-HOST_NICK = os.environ.get("HOST_NICK", "pratik2546").strip().lower()
+HOST_NICK = os.environ.get("HOST_NICK", "king").strip().lower()
 
 # room_id -> {"id": str, "members": {peer_id: {"ws": ws, "nick": str, "cam": bool}}}
 rooms = {}
